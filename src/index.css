@@ -1,0 +1,81 @@
+@import url('https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Hanken Grotesk", sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+  
+  --color-surface-container-low: #faf3e2;
+  --color-primary-fixed-dim: #dfc715;
+  --color-secondary-fixed-dim: #d5c77f;
+  --color-on-secondary-container: #6d6325;
+  --color-surface: #fff9eb;
+  --color-on-tertiary-container: #005567;
+  --color-on-surface-variant: #4b4733;
+  --color-primary: #6b5f00;
+  --color-error: #ba1a1a;
+  --color-tertiary-container: #62cceb;
+  --color-surface-container-lowest: #ffffff;
+  --color-on-error: #ffffff;
+  --color-surface-dim: #e0dac9;
+  --color-on-surface: #1e1c11;
+  --color-on-primary-fixed-variant: #514700;
+  --color-background: #fff9eb;
+  --color-on-tertiary-fixed-variant: #004e5f;
+  --color-surface-container-highest: #e8e2d1;
+  --color-on-secondary: #ffffff;
+  --color-on-secondary-fixed: #201c00;
+  --color-surface-container: #f4eedc;
+  --color-tertiary-fixed-dim: #6bd4f4;
+  --color-surface-container-high: #eee8d7;
+  --color-on-error-container: #93000a;
+  --color-outline: #7d7761;
+  --color-on-primary-container: #584d00;
+  --color-primary-fixed: #fde339;
+  --color-tertiary-fixed: #b3ebff;
+  --color-on-tertiary-fixed: #001f27;
+  --color-on-tertiary: #ffffff;
+  --color-tertiary: #00677d;
+  --color-secondary-container: #efe195;
+  --color-surface-bright: #fff9eb;
+  --color-error-container: #ffdad6;
+  --color-on-primary: #ffffff;
+  --color-on-primary-fixed: #201c00;
+  --color-inverse-primary: #dfc715;
+  --color-inverse-on-surface: #f7f0df;
+  --color-primary-container: #d7bf02;
+  --color-on-secondary-fixed-variant: #50470a;
+  --color-secondary: #695f21;
+  --color-secondary-fixed: #f2e398;
+  --color-surface-tint: #6b5f00;
+  --color-surface-variant: #e8e2d1;
+  --color-outline-variant: #cec7ac;
+  --color-inverse-surface: #333025;
+  --color-on-background: #1e1c11;
+}
+
+@layer base {
+  body {
+    background-color: var(--color-background);
+    color: var(--color-on-background);
+    font-family: var(--font-sans);
+  }
+}
+
+/* Custom scrollbar for preview */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #cec7ac;
+  border-radius: 10px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #7d7761;
+}
+

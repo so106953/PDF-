@@ -1,0 +1,6 @@
+{
+  "name": "InvoiceMerge",
+  "description": "更智能、更高效的发票合并专家。支持多张 PDF, PNG, JPG 发票的一键批量上传、智能日期 OCR 自动排序、查重拦截，并无损合并导出高清标准 A4 PDF 文档。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
