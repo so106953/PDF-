@@ -26,6 +26,11 @@ export default function App() {
     }
   }, []);
 
+  // Smoothly scroll window to top whenever step changes, so the user is always positioned at the active UI section
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, [step]);
+
   // Automatically transition to 'queue' step when files are added in the 'home' step
   const handleFilesAdded = (newFiles: InvoiceFile[]) => {
     setFiles(prev => [...prev, ...newFiles]);
@@ -125,7 +130,11 @@ export default function App() {
                   </div>
 
                   {/* Upload Zone */}
-                  <UploadZone onFilesAdded={handleFilesAdded} currentCount={files.length} />
+                  <UploadZone 
+                    onFilesAdded={handleFilesAdded} 
+                    currentCount={files.length} 
+                    onGoToQueue={() => setStep('queue')}
+                  />
 
                   {/* Security badges displayed directly on Upload Screen */}
                   <div className="pt-8 border-t border-outline-variant/40">
@@ -195,7 +204,7 @@ export default function App() {
                   setFiles={setFiles}
                   onStartMerge={handleStartMerge}
                   onClearQueue={handleClearQueue}
-                  onGoBack={handleResetApp}
+                  onGoBack={() => setStep('home')}
                   onTriggerUpload={() => setStep('home')}
                 />
               </motion.div>
@@ -226,7 +235,11 @@ export default function App() {
                 exit={{ opacity: 0, y: -15 }}
                 transition={{ duration: 0.3 }}
               >
-                <SuccessView files={files} onReset={handleResetApp} />
+                <SuccessView 
+                  files={files} 
+                  onReset={handleResetApp} 
+                  onBackToQueue={() => setStep('queue')}
+                />
               </motion.div>
             )}
           </AnimatePresence>

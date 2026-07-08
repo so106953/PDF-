@@ -1,170 +1,117 @@
 import React, { useState } from 'react';
-import { CheckCircle2, Download, Share2, Eye, Fullscreen, ArrowLeftRight, ChevronLeft, ChevronRight, X, Sparkles, RefreshCw } from 'lucide-react';
-import { InvoiceFile, MergedResult } from '../types';
-import { jsPDF } from 'jspdf';
+import { CheckCircle2, Download, Share2, Eye, Fullscreen, ChevronLeft, ChevronRight, X, Sparkles, RefreshCw, Loader2, FileSpreadsheet, Scissors, Layers, List, Plus } from 'lucide-react';
+import { InvoiceFile } from '../types';
 import { formatBytes } from '../mockData';
+import { mergeInvoices } from '../lib/pdfMerger';
 
 interface SuccessViewProps {
   files: InvoiceFile[];
   onReset: () => void;
+  onBackToQueue?: () => void;
 }
 
-export default function SuccessView({ files, onReset }: SuccessViewProps) {
-  const [isSharing, setIsSharing] = useState(false);
+export default function SuccessView({ files, onReset, onBackToQueue }: SuccessViewProps) {
   const [copied, setCopied] = useState(false);
   const [isLightboxOpen, setIsLightboxOpen] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState(0);
+  const [isMerging, setIsMerging] = useState(false);
+
+  // Layout states for stitching
+  const [layoutType, setLayoutType] = useState<'original' | '1-per-page' | '2-per-page' | '3-per-page'>('original');
+  const [includeCover, setIncludeCover] = useState<boolean>(false);
+  const [shouldCrop, setShouldCrop] = useState<boolean>(true);
 
   // Calculate stats
   const totalFiles = files.length;
   const totalSizeBytes = files.reduce((acc, f) => acc + f.size, 0);
-  const precompressedSize = (totalSizeBytes / 1024 / 1024 * 0.75).toFixed(1); // simulated 25% compression ratio
+  const precompressedSize = (totalSizeBytes / 1024 / 1024 * 0.95).toFixed(1); // simulated size representing original/high quality
 
-  // Core PDF Generation function with real metadata drawing
-  const handleDownloadPDF = () => {
+  // Helper to get total merged page count dynamically
+  const getMergedTotalPages = () => {
+    const coverCount = includeCover ? 1 : 0;
+    if (layoutType === 'original') {
+      return coverCount + files.length;
+    }
+    let invoicePageCount = files.length;
+    if (layoutType === '2-per-page') {
+      invoicePageCount = Math.ceil(files.length / 2);
+    } else if (layoutType === '3-per-page') {
+      invoicePageCount = Math.ceil(files.length / 3);
+    }
+    return coverCount + invoicePageCount;
+  };
+
+  // Helper to chunk the files array based on items per page for live visualization
+  const getGroupedPages = () => {
+    if (layoutType === 'original') {
+      return files.map(file => [file]);
+    }
+    const itemsPerPage = layoutType === '1-per-page' ? 1 : layoutType === '2-per-page' ? 2 : 3;
+    const groups: InvoiceFile[][] = [];
+    for (let i = 0; i < files.length; i += itemsPerPage) {
+      groups.push(files.slice(i, i + itemsPerPage));
+    }
+    return groups;
+  };
+
+  const groupedPages = getGroupedPages();
+
+  // Live interactive preview states
+  const [previewMode, setPreviewMode] = useState<'pages' | 'scroll'>('pages');
+  const [activePageIdx, setActivePageIdx] = useState<number>(0);
+
+  interface MergedPage {
+    type: 'cover' | 'invoices';
+    pageNumber: number;
+    files?: InvoiceFile[];
+  }
+
+  const getPagesList = (): MergedPage[] => {
+    const pages: MergedPage[] = [];
+    let pageCounter = 1;
+
+    if (includeCover) {
+      pages.push({
+        type: 'cover',
+        pageNumber: pageCounter++
+      });
+    }
+
+    const grouped = getGroupedPages();
+    grouped.forEach((group) => {
+      pages.push({
+        type: 'invoices',
+        pageNumber: pageCounter++,
+        files: group
+      });
+    });
+
+    return pages;
+  };
+
+  const pagesList = getPagesList();
+  const totalPagesCount = pagesList.length;
+  const currentActivePage = Math.min(activePageIdx, Math.max(0, totalPagesCount - 1));
+
+  // Core PDF Generation function with real metadata drawing and stitching
+  const handleDownloadPDF = async () => {
+    if (isMerging) return;
+    setIsMerging(true);
     try {
-      const doc = new jsPDF({
-        orientation: 'p',
-        unit: 'mm',
-        format: 'a4'
-      });
-
-      // Add a gorgeous, professional InvoiceMerge Summary cover page
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(26);
-      doc.setTextColor(107, 95, 0); // Primary gold color
-      doc.text('InvoiceMerge Report', 20, 40);
-
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(11);
-      doc.setTextColor(75, 71, 51); // Neutral dark grey
-      doc.text('Generated on: ' + new Date().toLocaleDateString(), 20, 48);
-      doc.text('Total Invoice Count: ' + totalFiles + ' pages', 20, 54);
-      doc.text('Original Cumulative Weight: ' + formatBytes(totalSizeBytes), 20, 60);
-      doc.text('Security Protocol: AES-256 Cloud Shred Compliant', 20, 66);
-
-      // Draw a table for index list of merged invoices
-      doc.setDrawColor(206, 199, 172); // outline-variant
-      doc.setLineWidth(0.5);
-      doc.line(20, 75, 190, 75);
-
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(12);
-      doc.setTextColor(30, 28, 17); // on-surface
-      doc.text('Invoice Details / Index List', 20, 84);
-
-      // Headers
-      doc.setFontSize(10);
-      doc.text('#', 22, 95);
-      doc.text('File Name', 32, 95);
-      doc.text('Date', 125, 95);
-      doc.text('Format', 155, 95);
-      doc.text('Size', 172, 95);
-
-      doc.line(20, 98, 190, 98);
-
-      doc.setFont('helvetica', 'normal');
-      let yOffset = 106;
-      files.forEach((file, idx) => {
-        if (yOffset > 270) {
-          doc.addPage();
-          yOffset = 30;
-        }
-        doc.text(String(idx + 1), 22, yOffset);
-        
-        // Truncate name if too long for pdf line
-        let displayName = file.name;
-        if (displayName.length > 35) {
-          displayName = displayName.substring(0, 32) + '...';
-        }
-        doc.text(displayName, 32, yOffset);
-        doc.text(file.date, 125, yOffset);
-        doc.text(file.type.toUpperCase(), 155, yOffset);
-        doc.text(formatBytes(file.size), 172, yOffset);
-        
-        doc.line(20, yOffset + 3, 190, yOffset + 3);
-        yOffset += 12;
-      });
-
-      // Signature/Footer area on cover page
-      doc.setFontSize(9);
-      doc.setTextColor(125, 119, 97);
-      doc.text('This document index was compiled automatically by InvoiceMerge cloud utility.', 20, 275);
-      doc.text('All digital stamps matched successfully. Certified paperless output.', 20, 281);
-
-      // Append individual page representations as separate pages
-      files.forEach((file, idx) => {
-        doc.addPage();
-        
-        // Header watermark banner on each page
-        doc.setFillColor(250, 243, 226); // surface-container-low
-        doc.rect(0, 0, 210, 16, 'F');
-        
-        doc.setFont('helvetica', 'bold');
-        doc.setFontSize(9);
-        doc.setTextColor(107, 95, 0);
-        doc.text(`InvoiceMerge Client Safe • Page ${idx + 2} of ${totalFiles + 1}`, 15, 10);
-        
-        doc.setFont('helvetica', 'normal');
-        doc.setTextColor(125, 119, 97);
-        doc.text(`File: ${file.name} | Dated: ${file.date}`, 85, 10);
-
-        // Render invoice content. Draw a clean mock-up invoice structure inside the PDF sheet!
-        doc.setDrawColor(206, 199, 172);
-        doc.rect(15, 25, 180, 250); // page frame
-        
-        // Drawing text and line guides to simulate the original scanned layout
-        doc.setFont('helvetica', 'bold');
-        doc.setFontSize(16);
-        doc.setTextColor(30, 28, 17);
-        doc.text('CERTIFIED DIGITAL INVOICE COPY', 30, 45);
-        
-        doc.setFont('helvetica', 'normal');
-        doc.setFontSize(10);
-        doc.text('Invoice Identifier Code: #' + file.id.toUpperCase(), 30, 55);
-        doc.text('Authorized Validation Timestamp: ' + file.date + ' 12:00:00 UTC', 30, 62);
-        doc.text('Storage Shred Hash: SHA-256//' + Math.random().toString(16).substring(2, 10).toUpperCase(), 30, 69);
-        
-        doc.line(30, 77, 180, 77);
-        
-        // Mock financial body tables
-        doc.setFont('helvetica', 'bold');
-        doc.text('Line Item Description', 30, 90);
-        doc.text('Quantity', 120, 90);
-        doc.text('Total Price', 150, 90);
-        
-        doc.line(30, 94, 180, 94);
-        
-        doc.setFont('helvetica', 'normal');
-        doc.text('Corporate Business Subscription Billing Service Charge', 30, 105);
-        doc.text('1', 125, 105);
-        doc.text('CNY ' + (file.size / 1000).toFixed(2), 150, 105);
-        
-        doc.line(30, 112, 180, 112);
-        
-        doc.text('Platform Maintenance Levy Overrides (A4 High-Res Optimizer)', 30, 122);
-        doc.text('1', 125, 122);
-        doc.text('CNY 0.00', 150, 122);
-        
-        doc.line(30, 129, 180, 129);
-
-        // Official mock red stamp at bottom right
-        doc.setDrawColor(186, 26, 26); // red stamp
-        doc.setLineWidth(1);
-        doc.rect(130, 210, 45, 25);
-        doc.setFont('helvetica', 'bold');
-        doc.setFontSize(11);
-        doc.setTextColor(186, 26, 26);
-        doc.text('VERIFIED FAPIAO', 134, 220);
-        doc.setFontSize(8);
-        doc.text('INVOICEMERGE CO.', 134, 228);
-      });
-
-      // Trigger download dialog
-      doc.save('Merged_Invoices_Report_' + new Date().toISOString().split('T')[0] + '.pdf');
+      const mergedBlob = await mergeInvoices(files, layoutType, includeCover, shouldCrop);
+      const url = URL.createObjectURL(mergedBlob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'Merged_Invoices_Report_' + new Date().toISOString().split('T')[0] + '.pdf';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
     } catch (err) {
       console.error(err);
-      alert('生成 PDF 时出错，请稍后重试。');
+      alert('合并真实 PDF/图片时出错，请重试或检查文件是否已损坏。');
+    } finally {
+      setIsMerging(false);
     }
   };
 
@@ -178,8 +125,256 @@ export default function SuccessView({ files, onReset }: SuccessViewProps) {
   };
 
   const openLightbox = (index: number) => {
-    setLightboxIndex(index);
+    setLightboxIndex(Math.min(index, Math.max(0, totalPagesCount - 1)));
     setIsLightboxOpen(true);
+  };
+
+  const renderA4Page = (page: MergedPage, isLarge: boolean = false) => {
+    if (!page) return null;
+
+    if (page.type === 'cover') {
+      return (
+        <div className={`w-full h-full bg-white flex flex-col justify-between border-4 border-double border-neutral-300 p-4 sm:p-6 text-neutral-800 ${isLarge ? 'p-8 sm:p-10' : ''}`}>
+          <div className="space-y-4">
+            {/* Table Header */}
+            <div className="flex justify-between items-start border-b-2 border-neutral-800 pb-3">
+              <div>
+                <h2 className="font-display text-sm sm:text-base md:text-lg font-extrabold text-neutral-900 tracking-tight flex items-center gap-1.5">
+                  <FileSpreadsheet className="w-5 h-5 text-primary" />
+                  发票报销拼版汇总目录清单
+                </h2>
+                <p className="text-[9px] sm:text-[10px] text-neutral-500 font-mono mt-0.5 uppercase tracking-wider">
+                  Consolidated Invoice Reconciliation Summary
+                </p>
+              </div>
+              <div className="text-right font-mono text-[8px] sm:text-[9px] text-neutral-500 border border-neutral-300 p-1 rounded bg-neutral-50 select-none">
+                <div className="font-bold text-neutral-900">INDEXED SYSTEM</div>
+                <div>Status: COMPLIANT</div>
+              </div>
+            </div>
+
+            {/* Meta Information Grid */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 bg-neutral-50 p-2.5 rounded-lg border border-neutral-200 text-[9px] sm:text-xs font-mono">
+              <div>
+                <div className="text-neutral-400 text-[8px] sm:text-[9px]">合并日期 (Date)</div>
+                <div className="font-bold text-neutral-800">{new Date().toISOString().split('T')[0]}</div>
+              </div>
+              <div>
+                <div className="text-neutral-400 text-[8px] sm:text-[9px]">发票总数 (Invoices)</div>
+                <div className="font-bold text-primary">{files.length} 份文件</div>
+              </div>
+              <div>
+                <div className="text-neutral-400 text-[8px] sm:text-[9px]">排版格式 (Layout)</div>
+                <div className="font-bold text-neutral-800">
+                  {layoutType === 'original' && '1:1 原始规格'}
+                  {layoutType === '1-per-page' && '一页一张 (A4)'}
+                  {layoutType === '2-per-page' && '一页两张 (A4)'}
+                  {layoutType === '3-per-page' && '一页三张 (A4)'}
+                </div>
+              </div>
+              <div>
+                <div className="text-neutral-400 text-[8px] sm:text-[9px]">估算大小 (Size)</div>
+                <div className="font-bold text-neutral-800">{precompressedSize} MB</div>
+              </div>
+            </div>
+
+            {/* Main Metadata Table */}
+            <div className="overflow-hidden border border-neutral-200 rounded-lg">
+              <table className="w-full text-[9px] sm:text-[11px] text-left border-collapse">
+                <thead>
+                  <tr className="bg-neutral-100 border-b border-neutral-200 text-neutral-600 font-bold select-none">
+                    <th className="py-1.5 px-2 text-center w-10 border-r border-neutral-200">序号</th>
+                    <th className="py-1.5 px-2 border-r border-neutral-200">发票/单据文件名</th>
+                    <th className="py-1.5 px-2 text-center border-r border-neutral-200 w-24">提取开票日期</th>
+                    <th className="py-1.5 px-2 text-center border-r border-neutral-200 w-14">类型</th>
+                    <th className="py-1.5 px-2 text-right w-16">文件大小</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-neutral-100">
+                  {files.map((f, i) => (
+                    <tr key={f.id} className="hover:bg-neutral-50/50 transition-colors">
+                      <td className="py-1 px-2 text-center font-mono text-neutral-400 border-r border-neutral-200">{i + 1}</td>
+                      <td className="py-1 px-2 font-medium text-neutral-700 truncate max-w-[130px] sm:max-w-[240px] border-r border-neutral-200" title={f.name}>
+                        {f.name}
+                      </td>
+                      <td className="py-1 px-2 text-center font-mono text-primary font-bold border-r border-neutral-200">{f.date || '未识别'}</td>
+                      <td className="py-1 px-2 text-center font-mono uppercase text-neutral-400 border-r border-neutral-200">
+                        <span className="px-1 bg-neutral-100 border border-neutral-200 rounded text-[8px] font-semibold">{f.type}</span>
+                      </td>
+                      <td className="py-1 px-2 text-right font-mono text-neutral-500">{formatBytes(f.size)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Footer stamp elements */}
+          <div className="flex justify-between items-end border-t border-dashed border-neutral-200 pt-3 text-[8px] sm:text-[9px] font-mono text-neutral-400">
+            <div>
+              <p>系统数字指纹签章 (Digital Signature Handshake)</p>
+              <p className="text-neutral-300 font-mono text-[7px] sm:text-[8px]">SHA256: {Math.random().toString(16).substring(2, 18).toUpperCase()}</p>
+            </div>
+            <div className="text-right border border-red-200 rounded-full px-2.5 py-1 rotate-[-3deg] text-red-500 border-dashed bg-red-50/30 flex flex-col items-center justify-center select-none">
+              <span className="font-extrabold tracking-wider text-[8px]">报销专用章</span>
+              <span className="scale-75 text-[7px]">VERIFIED SECURITY</span>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // Invoices Page
+    const pageFiles = page.files || [];
+
+    return (
+      <div className="w-full h-full bg-white flex flex-col justify-between p-2 sm:p-4 gap-2 relative">
+        {layoutType === '1-per-page' || layoutType === 'original' ? (
+          // 1 Per Page Layout
+          <div className="w-full h-full flex flex-col">
+            <div className="flex-1 bg-neutral-50 rounded-lg border border-neutral-100 overflow-y-auto custom-scrollbar flex items-start justify-center p-2 relative group/invoice">
+              <img
+                src={pageFiles[0]?.previewUrl}
+                className="w-full h-auto object-contain block select-none pointer-events-none"
+                alt=""
+              />
+              <span className="absolute top-2 left-2 bg-black/65 text-white text-[9px] px-2 py-0.5 rounded opacity-0 group-hover/invoice:opacity-100 transition-opacity select-none">
+                💡 鼠标滚轮可滑动查看完整单据
+              </span>
+            </div>
+            <div className="text-center text-[10px] text-neutral-400 font-mono mt-1.5 truncate">
+              {pageFiles[0]?.name} ({pageFiles[0]?.date})
+            </div>
+          </div>
+        ) : layoutType === '2-per-page' ? (
+          // 2 Per Page Layout
+          <div className="w-full h-full flex flex-col justify-between gap-1.5">
+            {pageFiles[0] && (
+              <div className="h-[46%] w-full bg-neutral-50 rounded-lg border border-neutral-100 overflow-y-auto custom-scrollbar flex items-start justify-center p-1.5 relative group/invoice">
+                <img
+                  src={pageFiles[0]?.previewUrl}
+                  className="w-full h-auto object-contain block select-none pointer-events-none"
+                  alt=""
+                />
+                <span className="absolute top-1.5 left-1.5 bg-black/65 text-white text-[9px] px-2 py-0.5 rounded opacity-0 group-hover/invoice:opacity-100 transition-opacity select-none">
+                  💡 鼠标滚轮可滑动查看
+                </span>
+                <span className="absolute bottom-1.5 right-1.5 bg-neutral-800/85 text-white font-mono text-[8px] sm:text-[9px] px-2 py-0.5 rounded truncate max-w-[150px] select-none">
+                  {pageFiles[0]?.name}
+                </span>
+              </div>
+            )}
+
+            {/* Cut line */}
+            <div className="h-[5%] flex items-center justify-center relative select-none">
+              <div className="w-full border-t border-dashed border-neutral-300" />
+              <span className="absolute bg-white px-2 text-[8px] sm:text-[9px] text-neutral-400 font-mono flex items-center gap-1">
+                <Scissors className="w-3 h-3 text-neutral-400" />
+                沿此线裁剪 (Cut Line)
+              </span>
+            </div>
+
+            {pageFiles[1] ? (
+              <div className="h-[46%] w-full bg-neutral-50 rounded-lg border border-neutral-100 overflow-y-auto custom-scrollbar flex items-start justify-center p-1.5 relative group/invoice">
+                <img
+                  src={pageFiles[1]?.previewUrl}
+                  className="w-full h-auto object-contain block select-none pointer-events-none"
+                  alt=""
+                />
+                <span className="absolute top-1.5 left-1.5 bg-black/65 text-white text-[9px] px-2 py-0.5 rounded opacity-0 group-hover/invoice:opacity-100 transition-opacity select-none">
+                  💡 鼠标滚轮可滑动查看
+                </span>
+                <span className="absolute bottom-1.5 right-1.5 bg-neutral-800/85 text-white font-mono text-[8px] sm:text-[9px] px-2 py-0.5 rounded truncate max-w-[150px] select-none">
+                  {pageFiles[1]?.name}
+                </span>
+              </div>
+            ) : (
+              <div className="h-[46%] w-full bg-neutral-50/40 rounded-lg border border-dashed border-neutral-200 flex flex-col items-center justify-center text-neutral-400 select-none">
+                <span className="text-[10px] sm:text-xs font-semibold">此处留空</span>
+                <span className="text-[9px] sm:text-[10px]">无更多发票拼入此页</span>
+              </div>
+            )}
+          </div>
+        ) : (
+          // 3 Per Page Layout
+          <div className="w-full h-full flex flex-col justify-between gap-1">
+            {pageFiles[0] && (
+              <div className="h-[29%] w-full bg-neutral-50 rounded-lg border border-neutral-100 overflow-y-auto custom-scrollbar flex items-start justify-center p-1 relative group/invoice">
+                <img
+                  src={pageFiles[0]?.previewUrl}
+                  className="w-full h-auto object-contain block select-none pointer-events-none"
+                  alt=""
+                />
+                <span className="absolute top-1 left-1 bg-black/65 text-white text-[8px] px-1.5 py-0.2 rounded opacity-0 group-hover/invoice:opacity-100 transition-opacity select-none">
+                  💡 滚轮可滚动查看
+                </span>
+                <span className="absolute bottom-1 right-1 bg-neutral-800/85 text-white font-mono text-[8px] px-1.5 py-0.2 rounded truncate max-w-[120px] select-none">
+                  {pageFiles[0]?.name}
+                </span>
+              </div>
+            )}
+
+            {/* Cut line 1 */}
+            <div className="h-[4%] flex items-center justify-center relative select-none">
+              <div className="w-full border-t border-dashed border-neutral-300" />
+              <span className="absolute bg-white px-2 text-[8px] text-neutral-400 font-mono flex items-center gap-0.5">
+                <Scissors className="w-2.5 h-2.5 text-neutral-300" />
+                裁剪线
+              </span>
+            </div>
+
+            {pageFiles[1] ? (
+              <div className="h-[29%] w-full bg-neutral-50 rounded-lg border border-neutral-100 overflow-y-auto custom-scrollbar flex items-start justify-center p-1 relative group/invoice">
+                <img
+                  src={pageFiles[1]?.previewUrl}
+                  className="w-full h-auto object-contain block select-none pointer-events-none"
+                  alt=""
+                />
+                <span className="absolute top-1 left-1 bg-black/65 text-white text-[8px] px-1.5 py-0.2 rounded opacity-0 group-hover/invoice:opacity-100 transition-opacity select-none">
+                  💡 滚轮可滚动查看
+                </span>
+                <span className="absolute bottom-1 right-1 bg-neutral-800/85 text-white font-mono text-[8px] px-1.5 py-0.2 rounded truncate max-w-[120px] select-none">
+                  {pageFiles[1]?.name}
+                </span>
+              </div>
+            ) : (
+              <div className="h-[29%] w-full bg-neutral-50/40 rounded-lg border border-dashed border-neutral-200 flex flex-col items-center justify-center text-neutral-400 select-none">
+                <span className="text-[8px] sm:text-[9px]">此处留空</span>
+              </div>
+            )}
+
+            {/* Cut line 2 */}
+            <div className="h-[4%] flex items-center justify-center relative select-none">
+              <div className="w-full border-t border-dashed border-neutral-300" />
+              <span className="absolute bg-white px-2 text-[8px] text-neutral-400 font-mono flex items-center gap-0.5">
+                <Scissors className="w-2.5 h-2.5 text-neutral-300" />
+                裁剪线
+              </span>
+            </div>
+
+            {pageFiles[2] ? (
+              <div className="h-[29%] w-full bg-neutral-50 rounded-lg border border-neutral-100 overflow-y-auto custom-scrollbar flex items-start justify-center p-1 relative group/invoice">
+                <img
+                  src={pageFiles[2]?.previewUrl}
+                  className="w-full h-auto object-contain block select-none pointer-events-none"
+                  alt=""
+                />
+                <span className="absolute top-1 left-1 bg-black/65 text-white text-[8px] px-1.5 py-0.2 rounded opacity-0 group-hover/invoice:opacity-100 transition-opacity select-none">
+                  💡 滚轮可滚动查看
+                </span>
+                <span className="absolute bottom-1 right-1 bg-neutral-800/85 text-white font-mono text-[8px] px-1.5 py-0.2 rounded truncate max-w-[120px] select-none">
+                  {pageFiles[2]?.name}
+                </span>
+              </div>
+            ) : (
+              <div className="h-[29%] w-full bg-neutral-50/40 rounded-lg border border-dashed border-neutral-200 flex flex-col items-center justify-center text-neutral-400 select-none">
+                <span className="text-[8px] sm:text-[9px]">此处留空</span>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
   };
 
   return (
@@ -213,10 +408,20 @@ export default function SuccessView({ files, onReset }: SuccessViewProps) {
         <div className="flex flex-col sm:flex-row justify-center gap-4 pt-2 w-full max-w-md">
           <button
             onClick={handleDownloadPDF}
-            className="flex-1 h-[52px] px-8 bg-primary-container text-on-primary-container hover:brightness-95 font-extrabold rounded-xl flex items-center justify-center gap-2.5 transition-all active:scale-95 shadow-sm"
+            disabled={isMerging}
+            className="flex-1 h-[52px] px-8 bg-primary-container text-on-primary-container hover:brightness-95 font-extrabold rounded-xl flex items-center justify-center gap-2.5 transition-all active:scale-95 shadow-sm disabled:opacity-60"
           >
-            <Download className="w-5 h-5 text-primary" />
-            下载合并后的 PDF
+            {isMerging ? (
+              <>
+                <Loader2 className="w-5 h-5 animate-spin text-primary" />
+                正在合并PDF...
+              </>
+            ) : (
+              <>
+                <Download className="w-5 h-5 text-primary" />
+                下载合并后的 PDF
+              </>
+            )}
           </button>
           
           <button
@@ -231,10 +436,102 @@ export default function SuccessView({ files, onReset }: SuccessViewProps) {
             {copied ? '链接已复制!' : '分享链接'}
           </button>
         </div>
-
       </section>
 
-      {/* Document Preview Area (Bento-style layout) */}
+      {/* Interactive Print Layout Options Section */}
+      <section className="bg-surface-container-lowest border border-outline-variant rounded-2xl p-6 shadow-sm">
+        <h3 className="font-display text-base font-bold text-on-surface mb-4 flex items-center gap-2">
+          <Sparkles className="w-5 h-5 text-primary" />
+          智能发票拼版与排版设置 (A4 一页多张)
+        </h3>
+        
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {/* Layout selection buttons */}
+          <div className="space-y-2">
+            <label className="text-xs font-bold text-outline uppercase block">拼版打印与合并大小选项</label>
+            <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-2 lg:grid-cols-4 gap-2 bg-surface-container-low p-1 rounded-xl border border-outline-variant/30">
+              <button
+                type="button"
+                onClick={() => setLayoutType('original')}
+                className={`py-2 px-1 text-[11px] font-bold rounded-lg transition-all ${
+                  layoutType === 'original'
+                    ? 'bg-primary text-white shadow-sm'
+                    : 'text-on-surface-variant hover:bg-surface-container-high'
+                }`}
+              >
+                1:1 原图
+              </button>
+              <button
+                type="button"
+                onClick={() => setLayoutType('1-per-page')}
+                className={`py-2 px-1 text-[11px] font-bold rounded-lg transition-all ${
+                  layoutType === '1-per-page'
+                    ? 'bg-primary text-white shadow-sm'
+                    : 'text-on-surface-variant hover:bg-surface-container-high'
+                }`}
+              >
+                一页一张
+              </button>
+              <button
+                type="button"
+                onClick={() => setLayoutType('2-per-page')}
+                className={`py-2 px-1 text-[11px] font-bold rounded-lg transition-all ${
+                  layoutType === '2-per-page'
+                    ? 'bg-primary text-white shadow-sm'
+                    : 'text-on-surface-variant hover:bg-surface-container-high'
+                }`}
+              >
+                一页两张
+              </button>
+              <button
+                type="button"
+                onClick={() => setLayoutType('3-per-page')}
+                className={`py-2 px-1 text-[11px] font-bold rounded-lg transition-all ${
+                  layoutType === '3-per-page'
+                    ? 'bg-primary text-white shadow-sm'
+                    : 'text-on-surface-variant hover:bg-surface-container-high'
+                }`}
+              >
+                一页三张
+              </button>
+            </div>
+            <p className="text-[11px] text-outline leading-normal">
+              {layoutType === 'original' && '【推荐】完全保留原文件原始尺寸与高清晰度，不做任何裁剪与压缩。'}
+              {layoutType === '1-per-page' && '每张发票等比自适应拉伸并独立居中占满一页标准 A4 纸张。'}
+              {layoutType === '2-per-page' && '每页 A4 纵向堆叠 2 张发票，比例协调，适合高精度纸张归档。'}
+              {layoutType === '3-per-page' && '每页 A4 纵向堆叠 3 张发票，国家电子普通发票最节省纸张推荐！'}
+            </p>
+          </div>
+
+          {/* Toggle for cover page */}
+          <div className="space-y-2 flex flex-col justify-between">
+            <div>
+              <label className="text-xs font-bold text-outline uppercase block mb-1.5">汇总目录页 (首面清单)</label>
+              <div className="flex items-center justify-between p-3 bg-surface-container-low rounded-xl border border-outline-variant/30">
+                <span className="text-xs font-semibold text-on-surface">生成第一页清单汇总目录</span>
+                <button
+                  type="button"
+                  onClick={() => setIncludeCover(!includeCover)}
+                  className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                    includeCover ? 'bg-primary' : 'bg-outline-variant'
+                  }`}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                      includeCover ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+              </div>
+            </div>
+            <p className="text-[11px] text-outline leading-normal">
+              开启后在合并首面生成包含所有文件信息的清单表格，关闭则完全由纯发票拼版页构成。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      {/* Document Preview Area (Advanced Real-Time Interactive PDF A4 Document Viewer) */}
       <section className="bg-surface-container-low border border-outline-variant rounded-2xl p-6 shadow-sm">
         
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6">
@@ -243,130 +540,199 @@ export default function SuccessView({ files, onReset }: SuccessViewProps) {
               <Eye className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="font-display text-lg font-bold text-on-surface">文档在线预览</h2>
-              <p className="text-xs text-on-surface-variant mt-0.5">合并成品共 {totalFiles + 1} 页 (含第一页目录清单)</p>
+              <h2 className="font-display text-lg font-bold text-on-surface">拼版文档在线实时预览</h2>
+              <p className="text-xs text-on-surface-variant mt-0.5">
+                合并成品共 <span className="font-bold text-primary">{totalPagesCount}</span> 页 
+                {includeCover ? ' (含第一页清单目录)' : ' (纯发票拼版)'}
+              </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2 text-xs font-mono font-bold text-on-surface-variant">
-            <span className="bg-surface-container-highest px-2.5 py-1 rounded-md">
-              A4 纵向打印格式
-            </span>
-            <span className="bg-surface-container-highest px-2.5 py-1 rounded-md text-primary">
-              {precompressedSize} MB
-            </span>
+          {/* View mode toggle controls (Pages vs Scroll feed) */}
+          <div className="flex items-center gap-3 self-stretch sm:self-auto justify-between">
+            <div className="flex bg-surface-container-high p-1 rounded-xl border border-outline-variant/30 select-none">
+              <button
+                type="button"
+                onClick={() => setPreviewMode('pages')}
+                className={`flex items-center gap-1.5 py-1.5 px-3 text-xs font-bold rounded-lg transition-all ${
+                  previewMode === 'pages'
+                    ? 'bg-primary text-white shadow-sm'
+                    : 'text-on-surface-variant hover:bg-surface-container-highest'
+                }`}
+                title="单页翻页浏览模式"
+              >
+                <Layers className="w-3.5 h-3.5" />
+                单页翻页
+              </button>
+              <button
+                type="button"
+                onClick={() => setPreviewMode('scroll')}
+                className={`flex items-center gap-1.5 py-1.5 px-3 text-xs font-bold rounded-lg transition-all ${
+                  previewMode === 'scroll'
+                    ? 'bg-primary text-white shadow-sm'
+                    : 'text-on-surface-variant hover:bg-surface-container-highest'
+                }`}
+                title="纵向长卷滚动浏览"
+              >
+                <List className="w-3.5 h-3.5" />
+                多页长卷
+              </button>
+            </div>
+
+            <div className="hidden lg:flex items-center gap-2 text-xs font-mono font-bold text-on-surface-variant">
+              <span className="bg-surface-container-highest px-2.5 py-1 rounded-md">
+                A4 纸张排版
+              </span>
+              <span className="bg-surface-container-highest px-2.5 py-1 rounded-md text-primary">
+                {precompressedSize} MB
+              </span>
+            </div>
           </div>
         </div>
 
-        {/* Scrollable Gallery */}
-        <div className="custom-scrollbar flex gap-6 overflow-x-auto pb-4 snap-x">
-          
-          {/* Virtual cover page */}
-          <div className="flex-none snap-center group">
-            <div className="relative w-72 h-[410px] bg-white rounded-xl shadow-md border border-outline-variant overflow-hidden group-hover:shadow-lg transition-shadow p-5 flex flex-col justify-between">
-              <div className="space-y-4">
-                <div className="flex justify-between items-center border-b border-outline-variant/35 pb-2">
-                  <span className="text-[10px] font-bold text-primary font-mono uppercase">Cover Page</span>
-                  <span className="text-[10px] text-outline font-mono">P. 1</span>
-                </div>
-                <div className="space-y-2">
-                  <h4 className="font-display text-base font-bold text-primary">合并发票清单目录</h4>
-                  <p className="text-[11px] text-on-surface-variant leading-relaxed">
-                    此页为智能生成的汇总账单页，包含所有合并文件的元数据索引，方便财务审计人员直接核对扫描。
-                  </p>
-                </div>
-                
-                <div className="space-y-1.5 pt-2">
-                  {files.slice(0, 4).map((f, i) => (
-                    <div key={f.id} className="flex justify-between text-[10px] font-mono border-b border-dashed border-outline-variant/20 pb-1">
-                      <span className="truncate max-w-[150px]">{f.name}</span>
-                      <span className="text-primary font-bold">{f.date}</span>
-                    </div>
-                  ))}
-                  {files.length > 4 && (
-                    <p className="text-[10px] text-outline italic text-center pt-1">还有 {files.length - 4} 份文件未列出...</p>
-                  )}
-                </div>
+        {/* Dynamic preview content panel */}
+        {previewMode === 'pages' ? (
+          // PAGE BY PAGE FLIP VIEW
+          <div className="space-y-4">
+            <div className="relative w-full max-w-[540px] aspect-[1/1.414] bg-white border border-neutral-200 rounded-lg shadow-xl mx-auto overflow-hidden group">
+              
+              {/* Main content */}
+              {renderA4Page(pagesList[currentActivePage], false)}
+
+              {/* Float Overlay Indicator for full screen click */}
+              <div 
+                onClick={() => openLightbox(currentActivePage)}
+                className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center cursor-pointer rounded-lg text-white gap-2 select-none"
+              >
+                <Fullscreen className="w-8 h-8 text-white animate-pulse" />
+                <span className="bg-primary px-3 py-1.5 rounded-lg text-xs font-bold shadow-md">
+                  点击展开超清全屏大图 (P. {currentActivePage + 1})
+                </span>
               </div>
 
-              <div className="bg-surface-container-low p-2 rounded border border-outline-variant/30 text-[9px] font-mono text-outline text-center">
-                AES-256 SECURE ZERO-RESIDUE MOCK
+              {/* Float Page Number Tag */}
+              <div className="absolute bottom-3 right-3 bg-neutral-900/85 backdrop-blur-sm text-white text-[10px] font-mono font-extrabold px-3 py-1.5 rounded-full shadow-md select-none border border-neutral-700">
+                A4 PAGE {currentActivePage + 1} / {totalPagesCount}
               </div>
             </div>
-          </div>
 
-          {/* Actual pages */}
-          {files.map((file, idx) => (
-            <div key={file.id} className="flex-none snap-center group">
-              <div className="relative w-72 h-[410px] bg-white rounded-xl shadow-md border border-outline-variant overflow-hidden group-hover:shadow-lg transition-shadow">
-                <img
-                  src={file.previewUrl}
-                  alt=""
-                  className="w-full h-full object-cover select-none pointer-events-none"
-                  onError={(e) => {
-                    e.currentTarget.src = 'https://lh3.googleusercontent.com/aida-public/AB6AXuAwFzcy0VZ5-hJTVBFOEfDNRBm8AJKIMfo3DygYCz9-vRWWnUatVSOnR82M-JKgxWwBMJ-lytpR-WwMjchCSC_W_O9lA1c3D05Oh5fQOWNYj_n9CbF5tPrsV6scDG4zRB9wMOjcGvm7dwdU3gtmaSPmRsRMrJlF1qejM2BIMb1DVsETKjJUcls4ZOozfjxij0u80mhZlKfKiCRZI_dojkU7ABLOmrUOPoQtvReZFO-w7ToaI18kH46i9k9D0PRHZenWx9uSnKcnc';
-                  }}
-                />
-                
-                {/* Micro hover zoom action indicator */}
-                <div 
-                  onClick={() => openLightbox(idx)}
-                  className="absolute inset-0 bg-black/35 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center cursor-pointer"
-                >
-                  <span className="px-3.5 py-2 bg-white/95 rounded-lg font-bold text-xs text-on-surface shadow-md flex items-center gap-1">
-                    <Fullscreen className="w-3.5 h-3.5 text-primary" />
-                    全屏大图预览
+            {/* Navigation and Actions */}
+            <div className="flex items-center justify-between mt-4 bg-surface-container-low p-2.5 rounded-xl border border-outline-variant/35 max-w-[540px] mx-auto shadow-sm select-none">
+              <button
+                disabled={currentActivePage === 0}
+                onClick={() => setActivePageIdx(prev => Math.max(0, prev - 1))}
+                className="px-3 py-2 bg-white hover:bg-neutral-50 text-neutral-700 disabled:opacity-40 disabled:hover:bg-white rounded-lg border border-neutral-200 transition-colors flex items-center gap-1.5 text-xs font-bold shadow-sm"
+              >
+                <ChevronLeft className="w-4 h-4" />
+                上一页
+              </button>
+              
+              <span className="text-xs font-mono font-bold text-on-surface-variant bg-white border border-neutral-200/60 px-4 py-1.5 rounded-lg shadow-inner">
+                第 <span className="text-primary font-extrabold text-sm">{currentActivePage + 1}</span> / {totalPagesCount} 页
+              </span>
+
+              <button
+                disabled={currentActivePage === totalPagesCount - 1}
+                onClick={() => setActivePageIdx(prev => Math.min(totalPagesCount - 1, prev + 1))}
+                className="px-3 py-2 bg-white hover:bg-neutral-50 text-neutral-700 disabled:opacity-40 disabled:hover:bg-white rounded-lg border border-neutral-200 transition-colors flex items-center gap-1.5 text-xs font-bold shadow-sm"
+              >
+                下一页
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        ) : (
+          // MULTI-PAGE VERTICAL SCROLL VIEW
+          <div className="space-y-10 max-h-[75vh] overflow-y-auto custom-scrollbar p-6 bg-neutral-900/5 rounded-2xl border border-neutral-200/40">
+            <p className="text-[11px] text-center text-outline select-none pb-2">
+              💡 正在滚动浏览全部 {totalPagesCount} 页 A4 合并文档，使用滚轮上下翻页。点击任意单页可唤出超清大图。
+            </p>
+            {pagesList.map((page, idx) => (
+              <div key={idx} className="space-y-2">
+                <div className="flex items-center justify-between max-w-[540px] mx-auto px-1 select-none">
+                  <span className="text-[10px] font-mono font-extrabold text-neutral-400 uppercase tracking-widest bg-neutral-100 border border-neutral-200 px-2.5 py-0.5 rounded-full">
+                    A4 页码 PAGE {idx + 1} / {totalPagesCount}
                   </span>
+                  <button
+                    onClick={() => openLightbox(idx)}
+                    className="text-[10px] font-sans text-primary font-extrabold hover:underline flex items-center gap-1"
+                  >
+                    <Fullscreen className="w-3 h-3" />
+                    展开超清大图
+                  </button>
                 </div>
-
-                <div className="absolute bottom-2.5 right-2.5 bg-black/60 text-white text-[10px] font-mono font-bold px-2.5 py-1 rounded-full backdrop-blur-sm shadow-sm select-none">
-                  P. {idx + 2}
+                
+                <div className="relative w-full max-w-[540px] aspect-[1/1.414] bg-white border border-neutral-200 rounded-lg shadow-lg mx-auto overflow-hidden group">
+                  {renderA4Page(page, false)}
+                  
+                  {/* Floating click layer for hover trigger */}
+                  <div 
+                    onClick={() => openLightbox(idx)}
+                    className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center cursor-pointer rounded-lg text-white gap-2 select-none"
+                  >
+                    <Fullscreen className="w-8 h-8 text-white animate-pulse" />
+                    <span className="bg-primary px-3 py-1.5 rounded-lg text-xs font-bold shadow-md">
+                      查看第 {idx + 1} 页超清全屏
+                    </span>
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
-
-          {/* View Full Screen Lightbox Slot */}
-          <div
-            onClick={() => openLightbox(0)}
-            className="flex-none flex items-center justify-center w-52 h-[410px] rounded-xl border-2 border-dashed border-outline-variant hover:bg-surface-container-high transition-colors cursor-pointer group"
-          >
-            <div className="text-center p-4">
-              <Fullscreen className="w-8 h-8 text-outline mx-auto group-hover:scale-110 transition-transform mb-2" />
-              <p className="font-sans font-bold text-sm text-on-surface">启动幻灯片预览</p>
-              <p className="text-xs text-on-surface-variant mt-1">全屏翻页查看无损源文件</p>
-            </div>
+            ))}
           </div>
+        )}
 
+        {/* Dynamic Tips based on Layout selection */}
+        <div className="mt-6 p-4 bg-primary-container/10 border border-primary-container/35 rounded-xl flex items-start gap-3">
+          <div className="p-1.5 bg-primary/10 rounded-lg text-primary shrink-0">
+            <FileSpreadsheet className="w-4 h-4" />
+          </div>
+          <div>
+            <h4 className="text-xs font-bold text-on-surface">财务排版打印提示</h4>
+            <p className="text-[11px] text-on-surface-variant mt-0.5 leading-relaxed">
+              {layoutType === '3-per-page' && '您已选择【一页三张】排版，合并后的 A4 PDF 每页将等比紧凑容纳三张横版发票，并伴有浅色裁剪虚线，直接双面或单面打印出来即符合公司财务标准的装订及报销规范。'}
+              {layoutType === '2-per-page' && '您已选择【一页两张】排版，合并后的 A4 PDF 每页将上下居中容纳两张横版发票，预留充足裁剪装订线，推荐用以大颗粒面额报销归档。'}
+              {layoutType === '1-per-page' && '您已选择【一页一张】排版，原发票页面 1:1 无损拼入 PDF。适用于混合了 portrait 的非标账单。'}
+              {layoutType === 'original' && '您已选择【1:1 原图】排版，发票完全按照原图大小尺寸无损缝合，最适合多尺寸图片原始核实。'}
+            </p>
+          </div>
         </div>
 
       </section>
 
-      {/* Reset flow button */}
-      <div className="text-center pt-2">
+      {/* Primary reset and continue action buttons */}
+      <div className="flex flex-col sm:flex-row justify-center items-center gap-4 pt-4">
+        {onBackToQueue && (
+          <button
+            onClick={onBackToQueue}
+            className="h-11 px-6 bg-primary text-on-primary hover:brightness-110 rounded-xl font-bold flex items-center gap-2 active:scale-95 transition-all text-sm shadow-md"
+          >
+            <Plus className="w-4 h-4" />
+            返回调整 / 继续添加发票
+          </button>
+        )}
         <button
           onClick={onReset}
-          className="inline-flex items-center gap-1.5 text-primary font-bold text-sm hover:underline hover:text-primary-fixed-dim transition-colors group"
+          className="h-11 px-6 bg-white hover:bg-surface-container-high text-on-surface border border-outline rounded-xl font-semibold flex items-center gap-2 active:scale-95 transition-all text-sm shadow-sm"
         >
-          <RefreshCw className="w-4 h-4 group-hover:rotate-180 transition-transform duration-500 text-outline" />
-          开始新的合并任务
+          <RefreshCw className="w-4 h-4 text-outline" />
+          清空并重新开始
         </button>
       </div>
 
-      {/* Lightbox Slideshow Modal */}
+      {/* Full Screen Lightbox Slide Overlay for A4 Pages */}
       {isLightboxOpen && (
-        <div className="fixed inset-0 z-50 bg-black/90 flex flex-col justify-between p-4 md:p-6 backdrop-blur-sm animate-fade-in">
+        <div className="fixed inset-0 z-50 bg-black/95 backdrop-blur-md flex flex-col justify-between p-4 sm:p-6">
           
-          {/* Lightbox header */}
-          <div className="flex items-center justify-between text-white border-b border-white/10 pb-3">
+          {/* Header metadata bar */}
+          <div className="flex justify-between items-center text-white border-b border-white/10 pb-4">
             <div>
-              <h3 className="font-sans font-bold text-base">
-                {lightboxIndex === -1 ? '合并发票汇总清单' : files[lightboxIndex].name}
+              <h3 className="font-display text-sm font-bold text-white">
+                {pagesList[lightboxIndex]?.type === 'cover' ? '汇总发票清单与目录报表' : `第 ${pagesList[lightboxIndex]?.pageNumber} 页 A4 拼版成品`}
               </h3>
               <p className="text-xs text-white/60 mt-0.5">
-                {lightboxIndex === -1 
-                  ? 'A4 系统生成目录' 
-                  : `开票日期: ${files[lightboxIndex].date} | 格式: ${files[lightboxIndex].type.toUpperCase()}`}
+                {pagesList[lightboxIndex]?.type === 'cover' 
+                  ? '系统安全数字签章校验通过' 
+                  : `包含 ${pagesList[lightboxIndex]?.files?.length || 0} 张发票拼入 | 格式: ${layoutType === 'original' ? '1:1 原尺寸' : '标准 A4 纵向'}`}
               </p>
             </div>
             
@@ -379,59 +745,29 @@ export default function SuccessView({ files, onReset }: SuccessViewProps) {
           </div>
 
           {/* Core image stage */}
-          <div className="flex-1 flex items-center justify-between gap-4 max-h-[80vh]">
+          <div className="flex-1 flex items-center justify-between gap-4 max-h-[80vh] my-4">
             
             {/* Prev button */}
             <button
-              disabled={lightboxIndex === -1}
-              onClick={() => setLightboxIndex(prev => prev - 1)}
-              className="p-3 bg-white/10 hover:bg-white/20 rounded-full text-white disabled:opacity-20 disabled:hover:bg-white/10 transition-colors"
+              disabled={lightboxIndex === 0}
+              onClick={() => setLightboxIndex(prev => Math.max(0, prev - 1))}
+              className="p-3 bg-white/10 hover:bg-white/20 rounded-full text-white disabled:opacity-20 disabled:hover:bg-white/10 transition-colors shrink-0"
             >
               <ChevronLeft className="w-6 h-6" />
             </button>
 
-            {/* Stage element */}
-            <div className="flex-1 flex items-center justify-center h-full">
-              {lightboxIndex === -1 ? (
-                /* Cover summary table rendering in lightbox */
-                <div className="bg-white text-on-surface rounded-xl p-8 max-w-lg w-full aspect-[3/4] shadow-2xl flex flex-col justify-between">
-                  <div className="space-y-6">
-                    <div className="border-b-2 border-primary/20 pb-4">
-                      <h4 className="font-display text-xl font-bold text-primary">InvoiceMerge 智能合并清单</h4>
-                      <p className="text-xs text-on-surface-variant font-mono mt-1">UUID: #IM-REPORT-2023</p>
-                    </div>
-
-                    <div className="space-y-3">
-                      <p className="text-xs text-on-surface font-semibold">合并文件索引表:</p>
-                      <div className="space-y-2">
-                        {files.map((f, i) => (
-                          <div key={f.id} className="flex justify-between items-center text-xs font-mono border-b border-dashed border-outline-variant/30 pb-1.5">
-                            <span className="truncate max-w-[200px]">{f.name}</span>
-                            <span className="text-primary font-bold">{f.date}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="text-[10px] text-outline text-center border-t border-outline-variant/30 pt-4 font-mono">
-                    GENERATED BY INVOICEMERGE • DIGITAL SECURE ZERO LOG
-                  </div>
-                </div>
-              ) : (
-                <img
-                  src={files[lightboxIndex].previewUrl}
-                  className="max-h-full max-w-full object-contain rounded-lg shadow-2xl select-none"
-                  alt=""
-                />
-              )}
+            {/* Stage element with full scrolling support */}
+            <div className="flex-1 overflow-y-auto custom-scrollbar h-full max-h-[75vh] flex items-start justify-center p-2">
+              <div className="w-full max-w-[680px] aspect-[1/1.414] bg-white border border-neutral-200 rounded-lg shadow-2xl overflow-hidden relative">
+                {renderA4Page(pagesList[lightboxIndex], true)}
+              </div>
             </div>
 
             {/* Next button */}
             <button
-              disabled={lightboxIndex === totalFiles - 1}
-              onClick={() => setLightboxIndex(prev => prev + 1)}
-              className="p-3 bg-white/10 hover:bg-white/20 rounded-full text-white disabled:opacity-20 disabled:hover:bg-white/10 transition-colors"
+              disabled={lightboxIndex === totalPagesCount - 1}
+              onClick={() => setLightboxIndex(prev => Math.min(totalPagesCount - 1, prev + 1))}
+              className="p-3 bg-white/10 hover:bg-white/20 rounded-full text-white disabled:opacity-20 disabled:hover:bg-white/10 transition-colors shrink-0"
             >
               <ChevronRight className="w-6 h-6" />
             </button>
@@ -439,22 +775,15 @@ export default function SuccessView({ files, onReset }: SuccessViewProps) {
           </div>
 
           {/* Lightbox footer index indicators */}
-          <div className="flex items-center justify-center gap-2 pb-4">
-            <button
-              onClick={() => setLightboxIndex(-1)}
-              className={`h-2.5 rounded-full transition-all ${
-                lightboxIndex === -1 ? 'w-8 bg-primary-container' : 'w-2.5 bg-white/30'
-              }`}
-              title="目录页"
-            />
-            {files.map((file, idx) => (
+          <div className="flex items-center justify-center gap-2 pb-2 select-none">
+            {pagesList.map((page, idx) => (
               <button
-                key={file.id}
+                key={idx}
                 onClick={() => setLightboxIndex(idx)}
                 className={`h-2.5 rounded-full transition-all ${
                   lightboxIndex === idx ? 'w-8 bg-primary-container' : 'w-2.5 bg-white/30'
                 }`}
-                title={`第 ${idx + 2} 页`}
+                title={`第 ${idx + 1} 页`}
               />
             ))}
           </div>

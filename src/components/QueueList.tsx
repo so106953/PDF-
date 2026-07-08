@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Trash2, Calendar, GripVertical, ArrowUp, ArrowDown, LayoutGrid, List, Plus, AlertCircle, RefreshCw, CalendarDays, Edit2, Check } from 'lucide-react';
 import { InvoiceFile } from '../types';
 import { formatBytes } from '../mockData';
@@ -21,7 +21,18 @@ export default function QueueList({
   onTriggerUpload
 }: QueueListProps) {
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
-  const [autoSortByDate, setAutoSortByDate] = useState(false);
+  const [autoSortByDate, setAutoSortByDate] = useState(true);
+
+  // Automatically sort files chronologically when state is active or files/dates change
+  useEffect(() => {
+    if (autoSortByDate && files.length > 0) {
+      const isSorted = files.every((f, i) => i === 0 || new Date(files[i - 1].date).getTime() <= new Date(f.date).getTime());
+      if (!isSorted) {
+        const sorted = [...files].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+        setFiles(sorted);
+      }
+    }
+  }, [files, autoSortByDate, setFiles]);
   const [editingFileId, setEditingFileId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
   const [editingDate, setEditingDate] = useState('');
@@ -191,22 +202,28 @@ export default function QueueList({
                 </div>
 
                 <div className="space-y-4">
-                  {/* Thumbnail */}
-                  <div className="relative aspect-video bg-surface-container rounded-lg overflow-hidden border border-outline-variant/30 flex items-center justify-center">
-                    <img
-                      src={file.previewUrl}
-                      alt={file.name}
-                      className="w-full h-full object-cover"
+                  {/* Scrollable Thumbnail Container */}
+                  <div className="relative h-56 bg-surface-container rounded-lg border border-outline-variant/30 flex flex-col group/thumb overflow-hidden">
+                    <div className="flex-1 overflow-y-auto custom-scrollbar w-full h-full p-1 bg-neutral-50 rounded-lg">
+                      <img
+                        src={file.previewUrl}
+                        alt={file.name}
+                        className="w-full h-auto object-contain block mx-auto"
                       onError={(e) => {
                         // Fallback image in case of errors
                         e.currentTarget.src = 'https://lh3.googleusercontent.com/aida-public/AB6AXuAwFzcy0VZ5-hJTVBFOEfDNRBm8AJKIMfo3DygYCz9-vRWWnUatVSOnR82M-JKgxWwBMJ-lytpR-WwMjchCSC_W_O9lA1c3D05Oh5fQOWNYj_n9CbF5tPrsV6scDG4zRB9wMOjcGvm7dwdU3gtmaSPmRsRMrJlF1qejM2BIMb1DVsETKjJUcls4ZOozfjxij0u80mhZlKfKiCRZI_dojkU7ABLOmrUOPoQtvReZFO-w7ToaI18kH46i9k9D0PRHZenWx9uUqSnKcnc';
                       }}
                     />
-                    <span className="absolute bottom-2 left-2 px-2 py-0.5 bg-black/55 backdrop-blur-sm text-white text-[10px] font-mono rounded-full uppercase">
+                    </div>
+                    {/* Floating labels pinned relative to the parent thumb container */}
+                    <span className="absolute bottom-2 left-2 px-2 py-0.5 bg-black/75 backdrop-blur-sm text-white text-[10px] font-mono rounded-full uppercase z-10 pointer-events-none">
                       {file.type}
                     </span>
-                    <span className="absolute bottom-2 right-2 px-2 py-0.5 bg-primary-container/90 text-on-primary-container text-[10px] font-bold rounded-md">
+                    <span className="absolute bottom-2 right-2 px-2 py-0.5 bg-primary text-white text-[10px] font-bold rounded-md z-10 pointer-events-none shadow-sm">
                       P. {index + 1}
+                    </span>
+                    <span className="absolute top-2 left-2 opacity-50 group-hover/thumb:opacity-100 transition-opacity px-2 py-0.5 bg-black/55 backdrop-blur-sm text-[9px] text-white/90 rounded font-sans z-10 pointer-events-none">
+                      💡 鼠标滚轮可滑动查看完整发票
                     </span>
                   </div>
 
@@ -263,9 +280,12 @@ export default function QueueList({
                       </div>
 
                       <div className="flex items-center gap-3 text-xs text-on-surface-variant font-mono">
-                        <span className="flex items-center gap-1 text-primary">
-                          <CalendarDays className="w-3.5 h-3.5 shrink-0 text-outline" />
-                          {file.date}
+                        <span className="flex items-center gap-1 text-primary bg-primary/5 hover:bg-primary/10 px-2.5 py-1 rounded-lg border border-primary/10 transition-colors" title="系统精准识别的发票日期">
+                          <CalendarDays className="w-3.5 h-3.5 shrink-0 text-primary" />
+                          <span className="font-bold">{file.date}</span>
+                          <span className="bg-primary/15 text-primary text-[9px] font-bold px-1 rounded-md ml-1 shrink-0">
+                            已自动识别
+                          </span>
                         </span>
                         <span>•</span>
                         <span>{formatBytes(file.size)}</span>
@@ -316,8 +336,8 @@ export default function QueueList({
                     <span className="text-[10px] font-bold font-mono">{index + 1}</span>
                   </div>
 
-                  <div className="w-16 h-12 bg-surface-container rounded border border-outline-variant/30 overflow-hidden shrink-0">
-                    <img src={file.previewUrl} className="w-full h-full object-cover" alt="" />
+                  <div className="w-20 h-16 bg-surface-container rounded border border-outline-variant/30 overflow-y-auto custom-scrollbar shrink-0 flex items-start justify-center p-0.5 bg-neutral-50 group-hover:border-primary/40 transition-colors" title="鼠标上下滚动预览完整发票">
+                    <img src={file.previewUrl} className="w-full h-auto object-contain block" alt={file.name} />
                   </div>
 
                   {isEditing ? (
@@ -347,11 +367,15 @@ export default function QueueList({
                         {file.name}
                       </p>
                       <div className="flex items-center gap-3 text-xs text-on-surface-variant mt-1 font-mono">
-                        <span className="text-primary font-medium">{file.date}</span>
+                        <span className="text-primary font-bold bg-primary/5 px-2 py-0.5 rounded border border-primary/10 flex items-center gap-1" title="智能识别开票日期">
+                          <CalendarDays className="w-3 h-3 text-primary shrink-0" />
+                          <span>{file.date}</span>
+                          <span className="bg-primary/10 text-primary text-[9px] font-bold px-1 rounded-sm scale-90">已自动识别</span>
+                        </span>
                         <span>•</span>
                         <span>{formatBytes(file.size)}</span>
                         <span>•</span>
-                        <span className="uppercase text-[10px] bg-surface-container px-1 py-0.2 rounded font-semibold text-outline-variant">
+                        <span className="uppercase text-[10px] bg-surface-container px-1.5 py-0.5 rounded font-semibold text-outline-variant">
                           {file.type}
                         </span>
                       </div>
@@ -456,7 +480,7 @@ export default function QueueList({
               onClick={onGoBack}
               className="flex-1 sm:flex-none h-11 px-6 bg-white hover:bg-surface-container-high text-on-surface border border-outline rounded-xl font-semibold active:scale-95 transition-all text-sm"
             >
-              取消
+              返回添加发票
             </button>
             <button
               onClick={onStartMerge}

@@ -1,14 +1,138 @@
 import React, { useState, useRef } from 'react';
-import { FileText, Plus, CheckCircle } from 'lucide-react';
+import { FileText, Plus, CheckCircle, ArrowRight } from 'lucide-react';
 import { InvoiceFile } from '../types';
 import { INITIAL_MOCK_FILES, generateRandomMockFile } from '../mockData';
+
+function parseDateFromString(str: string): string | null {
+  if (!str) return null;
+
+  // Normalize spaces to handle patterns like "2026 年 04 月 18 日" or "2026 - 04 - 18"
+  const normalized = str.replace(/\s+/g, '');
+
+  // 1. Try standard YYYY-MM-DD, YYYY/MM/DD, YYYY.MM.DD with correct alternation order
+  // Alternation MUST have longer matches ([1-2][0-9]|3[0-1]) before shorter matches (0?[1-9]) to prevent greedy partial matches
+  const pattern1 = /(20[1-3][0-9])[\-\/\.](1[0-2]|0?[1-9])[\-\/\.]([1-2][0-9]|3[0-1]|0?[1-9])/;
+  const match1 = normalized.match(pattern1) || str.match(pattern1);
+  if (match1) {
+    const y = match1[1];
+    const m = match1[2].padStart(2, '0');
+    const d = match1[3].padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+
+  // 2. Try YYYY年MM月DD日 / YYYY年MM月DD
+  const pattern2 = /(20[1-3][0-9])\s*年\s*(1[0-2]|0?[1-9])\s*月\s*([1-2][0-9]|3[0-1]|0?[1-9])\s*(日|号)?/;
+  const match2 = str.match(pattern2) || normalized.match(/(20[1-3][0-9])年(1[0-2]|0?[1-9])月([1-2][0-9]|3[0-1]|0?[1-9])(日|号)?/);
+  if (match2) {
+    const y = match2[1];
+    const m = match2[2].padStart(2, '0');
+    const d = match2[3].padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+
+  // 3. Try 8-digit pure numbers: e.g. 20260418
+  const pattern3 = /\b(20[1-3][0-9])(0[1-9]|1[0-2])(0[1-9]|[1-2][0-9]|3[0-1])\b/;
+  const match3 = normalized.match(pattern3) || str.match(pattern3);
+  if (match3) {
+    return `${match3[1]}-${match3[2]}-${match3[3]}`;
+  }
+
+  // 4. Try MM月DD日 or MM月DD (without year, default to current year 2026)
+  const currentYear = new Date().getFullYear();
+  const pattern4 = /(1[0-2]|0?[1-9])\s*月\s*([1-2][0-9]|3[0-1]|0?[1-9])\s*(日|号)?/;
+  const match4 = str.match(pattern4) || normalized.match(/(1[0-2]|0?[1-9])月([1-2][0-9]|3[0-1]|0?[1-9])(日|号)?/);
+  if (match4) {
+    const m = match4[1].padStart(2, '0');
+    const d = match4[2].padStart(2, '0');
+    return `${currentYear}-${m}-${d}`;
+  }
+
+  // 5. Try standard MM-DD / MM.DD / MM/DD where MM is 1-12 and DD is 1-31 (using boundaries, e.g. "04-18" or "4/18")
+  const pattern5 = /\b(1[0-2]|0?[1-9])[\-\/\.]([1-2][0-9]|3[0-1]|0[1-9])\b/;
+  const match5 = str.match(pattern5) || normalized.match(pattern5);
+  if (match5) {
+    const m = match5[1].padStart(2, '0');
+    const d = match5[2].padStart(2, '0');
+    return `${currentYear}-${m}-${d}`;
+  }
+
+  return null;
+}
+
+function parsePdfFile(file: File): Promise<{ previewUrl: string; extractedDate: string | null }> {
+  return new Promise((resolve) => {
+    const scriptId = 'pdfjs-loader-script';
+    let script = document.getElementById(scriptId) as HTMLScriptElement;
+
+    const runRender = async () => {
+      let previewUrl = '';
+      let extractedDate: string | null = null;
+      try {
+        // @ts-ignore
+        const pdfjsLib = window['pdfjs-dist/build/pdf'];
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+        const arrayBuffer = await file.arrayBuffer();
+        const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+        const pdf = await loadingTask.promise;
+        const page = await pdf.getPage(1);
+
+        // 1. Generate high-fidelity canvas preview URL
+        const viewport = page.getViewport({ scale: 1.5 });
+        const canvas = document.createElement('canvas');
+        const context = canvas.getContext('2d');
+        canvas.height = viewport.height;
+        canvas.width = viewport.width;
+
+        if (context) {
+          await page.render({ canvasContext: context, viewport: viewport }).promise;
+          previewUrl = canvas.toDataURL('image/png');
+        }
+
+        // 2. Extract text and search for date
+        try {
+          const textContent = await page.getTextContent();
+          const textItems = textContent.items.map((item: any) => item.str).join(' ');
+          extractedDate = parseDateFromString(textItems);
+        } catch (textErr) {
+          console.error('Error extracting text from PDF:', textErr);
+        }
+
+        resolve({ previewUrl, extractedDate });
+      } catch (err) {
+        console.error('Error rendering PDF preview/text extraction:', err);
+        resolve({ previewUrl: '', extractedDate: null });
+      }
+    };
+
+    if (!script) {
+      script = document.createElement('script');
+      script.id = scriptId;
+      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+      script.onload = runRender;
+      script.onerror = () => {
+        console.error('Failed to load PDF.js script');
+        resolve({ previewUrl: '', extractedDate: null });
+      };
+      document.head.appendChild(script);
+    } else {
+      // @ts-ignore
+      if (window['pdfjs-dist/build/pdf']) {
+        runRender();
+      } else {
+        script.addEventListener('load', runRender);
+      }
+    }
+  });
+}
 
 interface UploadZoneProps {
   onFilesAdded: (files: InvoiceFile[]) => void;
   currentCount: number;
+  onGoToQueue?: () => void;
 }
 
-export default function UploadZone({ onFilesAdded, currentCount }: UploadZoneProps) {
+export default function UploadZone({ onFilesAdded, currentCount, onGoToQueue }: UploadZoneProps) {
   const [isDragOver, setIsDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -21,7 +145,7 @@ export default function UploadZone({ onFilesAdded, currentCount }: UploadZonePro
     setIsDragOver(false);
   };
 
-  const processUploadedFiles = (fileList: FileList) => {
+  const processUploadedFiles = async (fileList: FileList) => {
     const newFiles: InvoiceFile[] = [];
     for (let i = 0; i < fileList.length; i++) {
       const file = fileList[i];
@@ -29,22 +153,33 @@ export default function UploadZone({ onFilesAdded, currentCount }: UploadZonePro
       if (extension === 'pdf' || extension === 'png' || extension === 'jpg' || extension === 'jpeg') {
         const fileType = extension === 'pdf' ? 'pdf' : (extension === 'png' ? 'png' : 'jpg');
         
+        // 1. Try to parse date from filename first
+        let detectedDate = parseDateFromString(file.name);
+        
         // Generate a random preview image from the gorgeous examples as fallback, or local object URL if it's an image
-        let preview = 'https://lh3.googleusercontent.com/aida-public/AB6AXuAwFzcy0VZ5-hJTVBFOEfDNRBm8AJKIMfo3DygYCz9-vRWWnUatVSOnR82M-JKgxWwBMJ-lytpR-WwMjchCSC_W_O9lA1c3D05Oh5fQOWNYj_n9CbF5tPrsV6scDG4zRB9wMOjcGvm7dwdU3gtmaSPmRsRMrJlF1qejM2BIMb1DVsETKjJUcls4ZOozfjxij0u80mhZlKfKiCRZI_dojkU7ABLOmrUOPoQtvReZFO-w7ToaI18kH46i9k9D0PRHZenWx9uUqSnKcnc';
+        let preview = 'https://lh3.googleusercontent.com/aida-public/AB6AXuAwFzcy0VZ5-hJTVBFOEfDNRBm8AJKIMfo3DygYCz9-vRWWnUatVSOnR82M-JKgxWwBMJ-lytpR-WwMjchCSC_W_O9lA1c3D05Oh5fQOWNYj_n9CbF5tPrsV6scDG4zRB9wMOjcGvm7dwdU3gtmaSPmRsRMrJlF1qejM2BIMb1DVsETKjJUcls4ZOozfjxij0u80mhZlKfKiCRZI_dojkU7ABLOmrUOPoQtvReZFO-w7ToaI18kH46i9k9D0PRHZenWx9uSnKcnc';
         if (fileType !== 'pdf') {
           preview = URL.createObjectURL(file);
+        } else {
+          // It's a real PDF, let's try to extract the first page in high fidelity and read text for invoice date
+          const parsed = await parsePdfFile(file);
+          if (parsed.previewUrl) {
+            preview = parsed.previewUrl;
+          }
+          if (parsed.extractedDate) {
+            detectedDate = parsed.extractedDate;
+          }
         }
 
-        // Generate dynamic reasonable invoice date (default to today)
-        const today = new Date();
-        const dateStr = today.toISOString().split('T')[0];
+        // Default to today if no date was detected in filename or PDF text
+        const finalDate = detectedDate || new Date().toISOString().split('T')[0];
 
         newFiles.push({
           id: 'uploaded-' + Math.random().toString(36).substring(2, 9),
           name: file.name,
           size: file.size,
           type: fileType,
-          date: dateStr,
+          date: finalDate,
           previewUrl: preview,
           isReal: true,
           fileObject: file
@@ -152,10 +287,22 @@ export default function UploadZone({ onFilesAdded, currentCount }: UploadZonePro
       </div>
 
       <div className="flex justify-between items-center bg-surface-container-low border border-outline-variant/40 px-4 py-3 rounded-xl">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3">
           <span className="text-xs text-on-surface-variant font-medium">
             队列状态: {currentCount} 个待处理文件
           </span>
+          {currentCount > 0 && onGoToQueue && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onGoToQueue();
+              }}
+              className="text-xs bg-primary/10 hover:bg-primary/20 text-primary font-bold px-3 py-1 rounded-lg flex items-center gap-1 transition-all"
+            >
+              <span>返回合并队列</span>
+              <ArrowRight className="w-3 h-3" />
+            </button>
+          )}
         </div>
         <button
           onClick={handleAddRandomMock}
