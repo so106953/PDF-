@@ -5,7 +5,7 @@ import {defineConfig} from 'vite';
 
 export default defineConfig(({ command }) => {
   return {
-    base: './',
+    base: command === 'serve' ? '/' : './',
     plugins: [react(), tailwindcss()],
     build: {
       target: ['es2020', 'safari14'],
