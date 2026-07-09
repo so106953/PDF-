@@ -118,10 +118,43 @@ export default function SuccessView({ files, onReset, onBackToQueue }: SuccessVi
   // Share link copy action
   const handleShare = () => {
     const shareUrl = `${window.location.origin}/?share=invoice-${Math.random().toString(36).substring(2, 10)}`;
-    navigator.clipboard.writeText(shareUrl).then(() => {
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+      navigator.clipboard.writeText(shareUrl).then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      }).catch((err) => {
+        console.error('Clipboard copy failed, using fallback', err);
+        fallbackCopyText(shareUrl);
+      });
+    } else {
+      fallbackCopyText(shareUrl);
+    }
+  };
+
+  const fallbackCopyText = (text: string) => {
+    const textArea = document.createElement('textarea');
+    textArea.value = text;
+    textArea.style.position = 'fixed';
+    textArea.style.top = '0';
+    textArea.style.left = '0';
+    textArea.style.width = '2em';
+    textArea.style.height = '2em';
+    textArea.style.padding = '0';
+    textArea.style.border = 'none';
+    textArea.style.outline = 'none';
+    textArea.style.boxShadow = 'none';
+    textArea.style.background = 'transparent';
+    document.body.appendChild(textArea);
+    textArea.focus();
+    textArea.select();
+    try {
+      document.execCommand('copy');
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    });
+    } catch (err) {
+      console.error('Fallback copy failed', err);
+    }
+    document.body.removeChild(textArea);
   };
 
   const openLightbox = (index: number) => {

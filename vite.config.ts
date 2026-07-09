@@ -7,6 +7,10 @@ export default defineConfig(() => {
   return {
     base: './',
     plugins: [react(), tailwindcss()],
+    build: {
+      target: ['es2020', 'safari14'],
+      cssTarget: ['safari14'],
+    },
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
